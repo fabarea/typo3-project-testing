@@ -1,0 +1,320 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<project name="Build for TYPO3 extension testing" default="help">
+
+	<target name="help"
+         description="Displays a help message">
+		<echo>Ant usage:</echo>
+		<echo>====================</echo>
+		<echo>ant build            Build project and run the internal ants bellow</echo>
+		<echo>ant build-parallel   Build project and run the internal ants bellow in parallel when possible</echo>
+		<echo>ant phpmd            Perform project mess detection using PHPMD and output its result on the console</echo>
+		<echo>ant phpcs            Find coding standard violations using PHP_CodeSniffer and output its result on the console</echo>
+		<echo></echo>
+		<echo>Internal Ants:</echo>
+		<echo>====================</echo>
+		<echo>ant check-environment  Make sure the environment is well configured</echo>
+		<echo>ant prepare            Reset environment for the build</echo>
+		<echo>ant setup-typo3        Setup TYPO3 for the project (e.g download Core, dump database, ...)</echo>
+		<echo>ant lint               Validate PHP souce code using PHPLint utility</echo>
+		<echo>ant phploc             Measure project size using PHPLOC</echo>
+		<echo>ant pdepend            Calculate software metrics using PHP_Depend</echo>
+		<echo>ant phpmd-ci           Perform project mess detection using PHPMD</echo>
+		<echo>ant phpcs-ci           Find coding standard violations using PHP_CodeSniffer</echo>
+		<echo>ant phpcpd             Find duplicate code using PHPCPD</echo>
+		<echo>ant phpunit            Run unit tests with PHPUnit</echo>
+		<echo>ant phpcb              Aggregate tool output with PHP_CodeBrowser</echo>
+		<echo>ant phpdoc             Generate API documentation using PHPDocumentor</echo>
+
+	</target>
+
+	<!-- EDIT PER RUN -->
+	<property name="database.dump.input.name" value="" />
+
+	<!-- EDIT PER PROJECT -->
+	<property name="extension.path" value="/htdocs/typo3conf/ext/rss_output" />
+	<property name="resource.name" value="eren.local" />
+	<property name="database.name" value="erenlocal" />
+	<property name="typo3.version" value="4.5.7" />
+	<property name="phpcs.ignore.path" value="${extension.path}/ext_*,${extension.path}/Resources/Private/PHP" />
+	<property name="phpmd.ignore.path" value="Resources/Private/PHP" /><!-- put a white space if empty -->
+
+	<!-- EDIT PER INSTALLATION -->
+	<property name="database.user" value="root" />
+	<property name="database.password" value="root" />
+	<property name="resource.path" value="/home/fudriot/Jenkins/Projects/${resource.name}" />
+	<property name="antcontrib.path" value="/usr/share/java/ant-contrib.jar" />
+
+	<!-- ANT CONTRIB -->
+	<taskdef resource="net/sf/antcontrib/antcontrib.properties">
+		<classpath>
+			<pathelement location="${antcontrib.path}"/>
+		</classpath>
+	</taskdef>
+
+	<!-- CONVENIENCE TASK DEFINITION -->
+	<target name="build-debug" depends="" />
+	<target name="build" depends="check-environment, prepare, setup-typo3, lint, phploc, pdepend, phpmd-ci, phpcs-ci, phpcpd, phpunit, phpcb, phpdoc" />
+	<target name="build-parallel"
+			depends="check-environment, prepare, setup-typo3, lint, tools-parallel, phpunit, phpcb, phpdoc"/>
+
+	<target name="tools-parallel"
+         description="Run tools in parallel">
+		<parallel threadCount="2">
+			<sequential>
+				<antcall target="pdepend"/>
+				<antcall target="phpmd-ci"/>
+			</sequential>
+			<antcall target="phpcpd"/>
+			<antcall target="phpcs-ci"/>
+			<antcall target="phploc"/>
+		</parallel>
+	</target>
+
+	<target name="clean" description="Cleanup build artifacts">
+		<delete dir="${basedir}/build/api"/>
+		<delete dir="${basedir}/build/code-browser"/>
+		<delete dir="${basedir}/build/coverage"/>
+		<delete dir="${basedir}/build/logs"/>
+		<delete dir="${basedir}/build/pdepend"/>
+	</target>
+
+	<!-- TASK DEFINITION -->
+	<target name="check-environment"
+         description="Check the environment is safe">
+
+		<echo>Checking Environment...</echo>
+
+		<!-- Check existance of extension to be tested -->
+		<fail message="Configuration error: wrong extension path. Make sure property 'extension.path' is correctly set.">
+			<condition>
+				<not>
+					<available file="${basedir}${extension.path}" type="dir"/>
+				</not>
+			</condition>
+		</fail>
+
+		<!-- Check existance of resource file to be imported on the run time (e.g. localconf.php) -->
+		<fail message="Configuration error: missing file structure for the project. Make sure property 'resource.path' is correctly set.">
+			<condition>
+				<not>
+					<available file="${resource.path}" type="dir"/>
+				</not>
+			</condition>
+		</fail>
+
+		<!-- Check existance of Ant Contrib -->
+		<fail message="Configuration error: Ant Contrib is not installed or wrongly configured. Make sure property 'antcontrib.path' is correctly set">
+			<condition>
+				<not>
+					<available file="${antcontrib.path}" type="file"/>
+				</not>
+			</condition>
+		</fail>
+	</target>
+
+	<target name="setup-typo3"
+         description="Set up TYPO3 envirnoment">
+
+		<property name="core.path" value="${basedir}/htdocs/typo3_src-${typo3.version}" />
+
+		<!-- DOWNLOAD SOURCE -->
+		<if>
+			<not>
+				<available file="${core.path}" type="dir"/>
+			</not>
+			<then>
+				<!-- DOWNLOAD SOURCE -->
+				<exec executable="wget">
+					<arg value="http://get.typo3.org/${typo3.version}" />
+					<arg value="-O" />
+					<arg value="${core.path}.tgz" />
+				</exec>
+
+				<!-- EXCTRACT SOURCE -->
+				<untar src="${core.path}.tgz" dest="${basedir}/htdocs" compression="gzip" />
+
+				<!-- DELETE OLD SYMLINK -->
+				<exec executable="rm">
+					<arg value="${basedir}/htdocs/typo3_src" />
+				</exec>
+			</then>
+		</if>
+		<!-- CREATE typo3_src SYMLINK -->
+		<if>
+			<not>
+				<available file="${basedir}/htdocs/typo3_src" type="dir"/>
+			</not>
+			<then>
+				<symlink resource="${core.path}" link="${basedir}/htdocs/typo3_src" />
+			</then>
+		</if>
+
+		<!-- COPY localconf.php -->
+		<if>
+			<available file="${resource.path}/localconf.php" type="file"/>
+			<then>
+				<echo>Copying localconf.php...</echo>
+				<copy file="${resource.path}/localconf.php" todir="${basedir}/htdocs/typo3conf" overwrite="true" />
+			</then>
+		</if>
+
+		<!-- COPY extTables.php -->
+		<if>
+			<available file="${resource.path}/extTables.php" type="file"/>
+			<then>
+				<echo>Copying extTables.php...</echo>
+				<copy file="${resource.path}/extTables.php" todir="${basedir}/htdocs/typo3conf" overwrite="true" />
+			</then>
+		</if>
+
+		<!-- Dump Database -->
+		<if>
+			<available file="${resource.path}/${database.dump.input.name}" type="file"/>
+			<then>
+				<echo>Restoring database...</echo>
+				<exec executable="mysql" input="${resource.path}/${database.dump.input.name}">
+					<arg value="-u" />
+					<arg value="${database.user}" />
+					<arg value="-p${database.password}" />
+					<arg value="${database.name}" />
+				</exec>
+			</then>
+		</if>
+	</target>
+
+	<target name="prepare" depends="clean"
+         description="Prepare for build">
+		<mkdir dir="${basedir}/build/api"/>
+		<mkdir dir="${basedir}/build/code-browser"/>
+		<mkdir dir="${basedir}/build/coverage"/>
+		<mkdir dir="${basedir}/build/logs"/>
+		<mkdir dir="${basedir}/build/pdepend"/>
+	</target>
+
+	<target name="lint">
+		<apply executable="php" failonerror="true">
+			<arg value="-l" />
+
+			<fileset dir="${basedir}${extension.path}">
+				<include name="**/*.php" />
+			</fileset>
+
+			<fileset dir="${basedir}${extension.path}">
+				<include name="**/*.php" />
+			</fileset>
+		</apply>
+	</target>
+
+	<target name="phpdoc" description="Generate API documentation using PHPDocumentor">
+		<exec executable="phpdoc">
+			<arg value="--directory" />
+			<arg path="${basedir}${extension.path}" />
+			<arg value="--target" />
+			<arg path="${basedir}/build/api" />
+			<arg value="--ignore" />
+			<arg value="autoload.php" />
+		</exec>
+	</target>
+
+	<target name="phploc" description="Measure project size using PHPLOC">
+		<exec executable="phploc">
+			<arg value="--log-csv" />
+			<arg value="${basedir}/build/logs/phploc.csv" />
+			<arg path="${basedir}${extension.path}" />
+		</exec>
+	</target>
+
+	<target name="pdepend"
+			description="Calculate software metrics using PHP_Depend">
+		<exec executable="pdepend">
+			<arg value="--jdepend-xml=${basedir}/build/logs/jdepend.xml" />
+			<arg value="--jdepend-chart=${basedir}/build/pdepend/dependencies.svg" />
+			<arg value="--overview-pyramid=${basedir}/build/pdepend/overview-pyramid.svg" />
+			<arg path="${basedir}${extension.path}" />
+		</exec>
+	</target>
+
+	<target name="phpmd"
+			description="Perform project mess detection using PHPMD">
+		<exec executable="phpmd">
+			<arg path="${basedir}${extension.path}" />
+			<arg value="text" />
+			<arg value="${basedir}/build/phpmd.xml" />
+			<arg value="--exclude" />
+			<arg value="${phpmd.ignore.path}" />
+		</exec>
+	</target>
+
+	<target name="phpmd-ci"
+			description="Perform project mess detection using PHPMD">
+		<exec executable="phpmd">
+			<arg path="${basedir}${extension.path}" />
+			<arg value="xml" />
+			<arg value="${basedir}/build/phpmd.xml" />
+			<arg value="--reportfile" />
+			<arg value="${basedir}/build/logs/pmd.xml" />
+			<arg value="--exclude" />
+			<arg value="${phpmd.ignore.path}" />
+		</exec>
+	</target>
+
+	<target name="phpcs"
+         description="Find coding standard violations using PHP_CodeSniffer">
+		<exec executable="phpcs">
+			<arg value="--standard=${basedir}/build/phpcs.xml" />
+			<arg value="--ignore=${phpcs.ignore.path}" />
+			<arg path="${basedir}${extension.path}" />
+		</exec>
+	</target>
+
+	<target name="phpcs-ci"
+         description="Find coding standard violations using PHP_CodeSniffer">
+		<exec executable="phpcs" output="/dev/null">
+			<arg value="--report=checkstyle" />
+			<arg value="--report-file=${basedir}/build/logs/checkstyle.xml" />
+			<arg value="--standard=${basedir}/build/phpcs.xml" />
+			<arg value="--ignore=${phpcs.ignore.path}" />
+			<arg path="${basedir}${extension.path}" />
+		</exec>
+	</target>
+
+	<target name="phpcpd" description="Find duplicate code using PHPCPD">
+		<exec executable="phpcpd">
+			<arg value="--log-pmd" />
+			<arg value="${basedir}/build/logs/pmd-cpd.xml" />
+			<arg path="${basedir}${extension.path}" />
+		</exec>
+	</target>
+
+	<target name="phpunit" description="Run unit tests with PHPUnit">
+<!--		<exec executable="phpunit" failonerror="true"/>-->
+		<exec executable="php" failonerror="true">
+			<arg path="${basedir}/htdocs/typo3/cli_dispatch.phpsh" />
+			<arg value="phpunit" />
+			<arg value="--coverage-html"/>
+			<arg path="${basedir}/build/coverage" />
+			<arg value="--coverage-clover"/>
+			<arg path="${basedir}/build/logs/clover.xml" />
+			<arg value="--log-junit"/>
+			<arg path="${basedir}/build/logs/junit.xml" />
+			<arg path="${basedir}${extension.path}" />
+		</exec>
+	</target>
+
+	<target name="phpcb"
+         description="Aggregate tool output with PHP_CodeBrowser">
+		<exec executable="phpcb">
+			<arg value="--log" />
+			<arg path="${basedir}/build/logs" />
+			<arg value="--exclude" />
+			<arg path="${basedir}/htdocs/typo3_src*" />
+			<arg value="--exclude" />
+			<arg path="${basedir}/htdocs/typo3conf/ext/phpunit*" />
+			<arg value="--source" /><!-- does not seems to be used if log is given -->
+			<arg path="${basedir}${extension.path}" />
+			<arg value="--output" />
+			<arg path="${basedir}/build/code-browser" />
+		</exec>
+	</target>
+</project>
